@@ -18,6 +18,7 @@ public enum PlayerAnimationIndex : byte
 public class CharacterAuthoring : MonoBehaviour
 {
     public float moveSpeed; 
+    public int hitPoints; 
     
     public class Baker : Baker<CharacterAuthoring>
     {
@@ -35,6 +36,16 @@ public class CharacterAuthoring : MonoBehaviour
                 Value =  1,
             });
             AddComponent(entity, new AnimationIndexOverride());
+            AddComponent(entity, new CharacterMaxHitPoints
+            {
+                Value = authoring.hitPoints
+            });
+            AddComponent(entity, new CharacterCurrentHitPoints
+            {
+                Value = authoring.hitPoints
+            });
+
+            AddBuffer<DamageThisFrame>(entity);
         }
     }
 
@@ -72,6 +83,24 @@ public struct AnimationIndexOverride : IComponentData
 {
     public float Value;
 }
+
+public struct CharacterMaxHitPoints : IComponentData
+{
+    public int Value;
+}
+
+public struct CharacterCurrentHitPoints : IComponentData
+{
+    public int Value;
+}
+
+#region Buffers
+public struct DamageThisFrame : IBufferElementData
+{
+    public int Value;
+}
+
+#endregion
 
 #endregion
 
@@ -130,6 +159,24 @@ public partial struct GlobalTimeUpdateSystem : ISystem
     public void OnUpdate(ref SystemState state)
     {
         Shader.SetGlobalFloat(globalTimeShaderPropertyID, (float) SystemAPI.Time.ElapsedTime);
+    }
+}
+
+public partial struct ProcessDamageThisFrameSystem : ISystem
+{
+    [BurstCompile]
+    public void OnUpdate(ref SystemState state)
+    {
+        foreach (var (hitPoints, damageThisFrame) in SystemAPI.Query<RefRW<CharacterCurrentHitPoints>, DynamicBuffer<DamageThisFrame>>())
+        {
+            if(damageThisFrame.IsEmpty) continue;
+
+            foreach (var damage in damageThisFrame)
+            {
+                hitPoints.ValueRW.Value -= damage.Value;
+            }
+            damageThisFrame.Clear();
+        }
     }
 }
 #endregion
