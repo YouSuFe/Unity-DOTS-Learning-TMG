@@ -15,6 +15,7 @@ public class EnemyAuthoring : MonoBehaviour
 {
     public int AttackDamage;
     public float CooldownTime;
+    public GameObject GemPrefab;
     public class Baker : Baker<EnemyAuthoring>
     {
         public override void Bake(EnemyAuthoring authoring)
@@ -28,6 +29,10 @@ public class EnemyAuthoring : MonoBehaviour
             });
             AddComponent(entity, new EnemyCooldownExpirationTimeStamp());
             SetComponentEnabled<EnemyCooldownExpirationTimeStamp>(entity, false);
+            AddComponent(entity, new GemPrefab
+            {
+                Value = GetEntity(authoring.GemPrefab, TransformUsageFlags.Dynamic),
+            });
         }
     }
 }
@@ -53,6 +58,11 @@ public struct EnemyCooldownExpirationTimeStamp : IComponentData, IEnableableComp
 {
     public double Value;
 }
+
+public struct GemPrefab : IComponentData
+{
+    public Entity Value;
+}
 #endregion
 
 
@@ -61,6 +71,11 @@ public struct EnemyCooldownExpirationTimeStamp : IComponentData, IEnableableComp
 
 public partial struct EnemyMoveToPlayerSystem : ISystem
 {
+    public void OnCreate(ref SystemState state)
+    {
+        state.RequireForUpdate<PlayerTag>();
+    }
+
     public void OnUpdate(ref SystemState state)
     {
         // We can use this when we only have one instance of this entity
@@ -82,6 +97,11 @@ public partial struct EnemyMoveToPlayerSystem : ISystem
 [UpdateBefore(typeof(AfterPhysicsSystemGroup))]
 public partial struct EnemyAttackSystem : ISystem
 {
+    public void OnCreate(ref SystemState state)
+    {
+        state.RequireForUpdate<SimulationSingleton>();
+    }
+
     [BurstCompile]
     public void OnUpdate(ref SystemState state)
     {

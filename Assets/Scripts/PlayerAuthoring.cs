@@ -1,9 +1,11 @@
+using TMG.Survivors;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using Unity.Physics;
 using Unity.Transforms;
 using UnityEngine;
+using UnityEngine.UI;
 
 #region Authoring
 
@@ -12,7 +14,7 @@ public class PlayerAuthoring : MonoBehaviour
     public GameObject AttackPrefab;
     public float CooldownTime;
     public float DetectionSize;
-    
+    public GameObject WorldUIPrefab;
     
     public class Baker : Baker<PlayerAuthoring>
     {
@@ -40,6 +42,13 @@ public class PlayerAuthoring : MonoBehaviour
                 CollisionFilter = attackCollisionFilter
             });
             AddComponent(entity, new PlayerCooldownExpirationTimeStamp());
+            AddComponent(entity, new GemsCollectedCount());
+            AddComponent(entity, new UpdateGameUIFlag());
+            AddComponent(entity, new PlayerWorldUIPrefab
+            {
+                Value =  authoring.WorldUIPrefab,
+            });
+            
         }
     }
 }
@@ -69,9 +78,33 @@ public struct PlayerAttackData : IComponentData
     public CollisionFilter CollisionFilter;
 }
 
+public struct GemsCollectedCount : IComponentData
+{
+    public int Value;
+}
+
+// This is for game object world UI updates to be used in Systems or Jobs.
+public struct UpdateGameUIFlag : IComponentData, IEnableableComponent
+{
+}
+
 public struct PlayerCooldownExpirationTimeStamp : IComponentData
 {
     public double Value;
+}
+
+// It adds additional clean-up logic when the main entity is destroyed (player).
+// The thing is when an entity is destroyed, it remains as a ghost on the system.
+// That is because it has some clean-up logic that will be cleaned after destroyed (I guess LocalTransform is one of them). 
+public struct PlayerWorldUI : ICleanupComponentData
+{
+    public  UnityObjectRef<Transform> CanvasTransform;
+    public  UnityObjectRef<Slider> HealthBarSlider;
+}
+
+public struct PlayerWorldUIPrefab : IComponentData
+{
+    public UnityObjectRef<GameObject> Value;
 }
 #endregion
 
@@ -207,6 +240,62 @@ public partial struct PlayerAttackSystem : ISystem
 
             expirationTimeStamp.ValueRW.Value = elapsedTime + attackData.ValueRO.CooldownTime;
         }
+    }
+}
+
+public partial struct UpdateGemUISystem : ISystem
+{
+    public void OnUpdate(ref SystemState state)
+    {
+        foreach (var (gemCount, shouldUpdateUI)
+                 in SystemAPI.Query<RefRO<GemsCollectedCount>, EnabledRefRW<UpdateGameUIFlag>>())
+        {
+            GameUIController.Instance.UpdateGemsCollectedText(gemCount.ValueRO.Value);
+            shouldUpdateUI.ValueRW = false;
+        }
+    }
+}
+
+public partial struct PlayerWorldUISystem : ISystem
+{
+    // We cannot use Burst here beacuse it has managed type components
+    public void OnUpdate(ref SystemState state)
+    {
+        EntityCommandBuffer entityCommandBuffer = new EntityCommandBuffer(state.WorldUpdateAllocator);
+        
+        foreach (var (uiPrefab, entity)
+                 in SystemAPI.Query<RefRO<PlayerWorldUIPrefab>>().WithNone<PlayerWorldUI>().WithEntityAccess())
+        {
+            var newWorldUI = Object.Instantiate(uiPrefab.ValueRO.Value.Value);
+            
+            entityCommandBuffer.AddComponent(entity, new PlayerWorldUI
+            {
+                CanvasTransform =  newWorldUI.transform,
+                HealthBarSlider = newWorldUI.GetComponentInChildren<Slider>()
+            });
+        }
+
+        foreach (var (localTransform, worldUI,
+                     currentHitPoints, maxHitPoints)
+                 in SystemAPI.Query<RefRO<LocalTransform>, RefRO<PlayerWorldUI>, RefRO<CharacterCurrentHitPoints>, RefRO<CharacterMaxHitPoints>>())
+        {
+            worldUI.ValueRO.CanvasTransform.Value.position = localTransform.ValueRO.Position;
+            var healthValue = (float)currentHitPoints.ValueRO.Value / maxHitPoints.ValueRO.Value;
+            worldUI.ValueRO.HealthBarSlider.Value.value = healthValue;
+        }
+
+        // With this query, we are looking for destroyed ghost objects. The object itself is destroyed, but there are remains Clean Up objects.
+        foreach (var (worldUI, entity) in SystemAPI.Query<RefRO<PlayerWorldUI>>().WithNone<LocalToWorld>().WithEntityAccess())
+        {
+            if (worldUI.ValueRO.CanvasTransform.Value != null)
+            {
+                Object.Destroy(worldUI.ValueRO.CanvasTransform.Value.gameObject);
+            }
+            
+            entityCommandBuffer.RemoveComponent<PlayerWorldUI>(entity);
+        }
+        
+        entityCommandBuffer.Playback(state.EntityManager);
     }
 }
 #endregion
